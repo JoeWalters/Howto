@@ -1,0 +1,247 @@
+# Ubuntu Preseed with Encryption
+# Sources:
+## https://bugs.launchpad.net/ubuntu/+source/ubiquity/+bug/1386131
+## https://wiki.ubuntu.com/Enterprise/WorkstationAutoinstallPreseed
+
+# This assumes you're using a current Ubuntu install to create the new iso.
+
+##############################
+## ks.preseed file
+##############################
+## Download Ubuntu 14.04 LTS and mount it 
+$ sudo su -
+mkdir -p /mnt/iso
+mount -o loop ubuntu.iso /mnt/iso
+
+# Copy the files to /opt/ubuntuiso
+mkdir -p /opt/ubuntuiso
+rsync -av /mnt/iso /opt/ubuntuiso
+
+# Edit /opt/ubuntuiso/isolinux/txt.cfg to look
+default live
+label live
+  menu label ^Install custom
+  kernel /casper/vmlinuz.efi
+  append  file=/cdrom/preseed/ubuntu.seed boot=casper only-ubiquity automatic-ubiquity initrd=/casper/initrd.lz ks=cdrom:/ks.cfg preseed/file=/cdrom/ks.preseed quiet splash --
+label live-install
+  menu label ^Install Ubuntu
+  kernel /casper/vmlinuz.efi
+  append  file=/cdrom/preseed/ubuntu.seed boot=casper only-ubiquity initrd=/casper/initrd.lz quiet splash --
+label check
+  menu label ^Check disc for defects
+  kernel /casper/vmlinuz.efi
+  append  boot=casper integrity-check initrd=/casper/initrd.lz quiet splash --
+label memtest
+  menu label Test ^memory
+  kernel /install/mt86plus
+label hd
+  menu label ^Boot from first hard disk
+  localboot 0x80
+  
+# Create /opt/ubuntuiso/ks.preseed with the following (Or create your own):
+
+##############
+# Networking
+##############
+
+# netcfg will choose an interface that has link if possible. This makes it
+# skip displaying a list if there is more than one interface.
+d-i netcfg/choose_interface     select auto
+
+# The wacky dhcp hostname that  some ISPs use as a password of sorts.
+d-i netcfg/dhcp_hostname        string vdomain
+
+# Disable that annoying WEP key dialog.
+d-i netcfg/wireless_wep string
+
+
+########################
+# Installation
+########################
+
+# *!*
+d-i debian-installer/locale     string en_US
+d-i debian-installer/splash     boolean false
+
+# Controls whether to use NTP to set the clock during the install
+d-i clock-setup/ntp     boolean true
+# NTP server to use. The default is almost always fine here.
+#d-i clock-setup/ntp-server     string ntp.example.com
+
+### Finishing
+# Avoid that last message about the install being complete.
+d-i finish-install/reboot_in_progress note
+# whether to prevent the installer from ejecting the CD during the reboot
+d-i cdrom-detect/eject  boolean true
+# whether to make the installer shutdown when finished, not
+#  to reboot into the installed system.
+d-i debian-installer/exit/halt  boolean false
+# whether to power off the machine instead of just halting it.
+d-i debian-installer/exit/poweroff      boolean false
+
+### Mirror settings
+# *!*
+d-i mirror/country      string US
+d-i mirror/http/mirror  string us.archive.ubuntu.com
+d-i mirror/http/directory       string /ubuntu/
+
+### Apt setup
+d-i apt-setup/backports boolean true
+d-i apt-setup/contrib   boolean true
+d-i apt-setup/multiverse        boolean true
+d-i apt-setup/non-free  boolean true
+d-i apt-setup/proposed  boolean true
+d-i apt-setup/universe  boolean true
+# Enable deb-src lines
+d-i apt-setup/universe/source boolean true
+
+# Select which update services to use
+d-i apt-setup/services-select    multiselect    security
+d-i apt-setup/security_host     string  security.ubuntu.com
+d-i apt-setup/security_path     string /ubuntu
+
+# Force debconf priority to critical.
+debconf debconf/priority select critical
+# Override default frontend to readline,
+debconf debconf/frontend select readline
+# but allow user to select.
+#debconf debconf/frontend seen false
+
+#################################
+# Disk Partitioning/Boot loader
+#################################
+
+#d-i partman-auto/disk string /dev/sda
+d-i partman-auto/method string crypto
+d-i partman-md/device_remove_md boolean true
+d-i partman-lvm/device_remove_lvm boolean true
+d-i partman-lvm/confirm boolean true
+d-i partman-lvm/confirm_nooverwrite boolean true
+d-i partman-auto-lvm/guided_size string max
+d-i partman-auto-lvm/new_vg_name string vg-workstation
+#d-i partman-auto/choose_recipe select boot-crypto
+d-i partman-auto/choose_recipe select custom-lvm
+##d-i partman-lvm/device_remove_lvm_span boolean true
+
+#d-i partman-auto/expert_recipe string boot-crypto :: \
+d-i partman-auto/expert_recipe string			      \
+      custom-lvm ::                                           \
+        250 250 250 ext4 $primary{ } $bootable{ }             \
+        mountpoint{ /boot }                                   \
+        method{ format }                                      \
+        format{ }                                             \
+        use_filesystem{ }                                     \
+        filesystem{ ext4 }                                    \
+        .                                                     \
+        10240 20480 40960 ext4 $lvmok{ }                      \
+        mountpoint{ / }                                       \
+        lv_name{ root }                                       \
+        in_vg { vg-workstation }                              \
+        method{ format }                                      \
+        format{ }                                             \
+        use_filesystem{ }                                     \
+        filesystem{ ext4 }                                    \
+        .                                                     \
+        10240 40960 1000000 ext4 $lvmok{ }                    \
+        mountpoint{ /home }                                   \
+        lv_name{ home }                                       \
+        in_vg { vg-workstation }                              \
+        method{ format }                                      \
+        format{ }                                             \
+        use_filesystem{ }                                     \
+        filesystem{ ext4 }                                    \
+        .                                                     \
+        4096 8192 200% linux-swap $lvmok{ }                   \
+        lv_name{ swap }                                       \
+        in_vg { vg-workstation }                              \
+        method{ swap }                                        \
+        format{ }                                             \
+        .
+# If you just want to change the default filesystem from ext3 to something
+# else, you can do that without providing a full recipe.
+d-i partman/default_filesystem string ext4
+
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+
+### Booting
+
+
+# This is fairly safe to set, it makes grub install automatically to the MBR
+# if no other operating system is detected on the machine.
+d-i grub-installer/only_debian boolean true
+
+# This one makes grub-installer install to the MBR if it also finds some other
+# OS, which is less safe as it might not be able to boot that other OS.
+d-i grub-installer/with_other_os boolean true
+
+
+#################
+# Localizations
+#################
+
+# Keyboard localization
+d-i console-setup/ask_detect    boolean false
+d-i console-setup/layoutcode    string us
+d-i console-keymaps-at/keymap   select us
+d-i console-setup/variantcode   string
+
+# Timezone
+d-i clock-setup/utc     boolean true
+# *!*
+d-i time/zone   string  America/Los_Angeles
+
+
+#################
+# User Creation
+#################
+
+#d-i user-setup/allow-password-weak      boolean true
+#d-i user-setup/password-weak    boolean true
+#
+#d-i user-setup/encrypt-home     boolean false
+#
+#
+#d-i passwd/root-login   boolean false
+#d-i passwd/make-user    boolean true
+## *!*
+#d-i passwd/user-fullname        string  user
+#d-i passwd/username     string    user
+#d-i passwd/user-password    password    user
+#d-i passwd/user-password-again password user
+#d-i passwd/user-uid     string    1001
+#d-i passwd/user-default-groups  string  adm tty disk lp mail news uucp man dialout fax voice cdrom floppy tape sudo audio dip www-data backup operator list irc src gnats shadow video sasl plugdev staff games users nogroup crontab syslog fuse messagebus mlocate ssh lpadmin sambashare vboxsf
+## cat /etc/group | awk -F':' '{print $1}' | xargs
+
+#######################
+# Software Selections
+#######################
+
+### Base system installation
+
+### Package selection
+tasksel tasksel/first multiselect ubuntu-desktop
+
+
+#######################
+# X configuration
+#######################
+# Monitor autodetection is recommended.
+xserver-xorg xserver-xorg/autodetect_monitor boolean true
+# weather you have an LCD display.
+xserver-xorg xserver-xorg/config/monitor/lcd boolean true
+# X has three configuration paths for the monitor. Here's how to preseed
+# the "medium" path, which is always available. The "simple" path may not
+# be available, and the "advanced" path asks too many questions.
+xserver-xorg xserver-xorg/config/monitor/selection-method \
+       select medium
+xserver-xorg xserver-xorg/config/monitor/mode-list \
+       select 1024x768 @ 60 Hz
+
+##############################################
+
+# Recreate the iso
+cd /opt/ubuntuiso
+mkisofs -D -r -V "ATTENDLESS_UBUNTU" -cache-inodes -J -l -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -o ~/ubuntu-14.04-myowninstall-amd64.iso .
